@@ -2,13 +2,13 @@ package awsdynamodb
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/pkg/errors"
 )
 
 func GetIds(dynamoDB *dynamodb.DynamoDB, w http.ResponseWriter, r *http.Request) (int, error) {
@@ -56,20 +56,16 @@ func GetIds(dynamoDB *dynamodb.DynamoDB, w http.ResponseWriter, r *http.Request)
 		responseError = strings.Join(paramErrors, "")
 		fmt.Fprintf(w, responseError)
 		// this error isn't handled anywhere at the moment
-		return 404, errors.New("Internal Server Error")
+		return 404, errors.New("Parameter Errors")
 	}
 
 	if resp, err := Fetch(*dynamoDB, cid, domain, id, targetDomains); err != nil {
-		log.Printf("error fetching records: %s", err)
-		return 500, errors.New("Internal Server Error")
+		return 500, errors.Wrap(err, "Error fetching records")
 
 	} else {
 		if bb, err := json.Marshal(resp); err != nil {
-			// We only write this kind of application-specific logs. The infrastructure should log
-			// the incoming request, time taken to process the reqyest response size (ideally in a standard
-			// format such as Apache web logging (https://httpd.apache.org/docs/1.3/logs.html).
-			log.Printf("error generating json: %s", err)
-			return 500, errors.New(responseError)
+			return 500, errors.Wrap(errors.New(responseError), "Error generating json")
+
 		} else {
 			w.Header()["Content-Type"] = []string{"application/json"}
 			w.Write(bb)

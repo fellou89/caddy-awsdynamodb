@@ -1,8 +1,8 @@
 package awsdynamodb
 
 import (
-	"fmt"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/pkg/errors"
 	"regexp"
 )
 
@@ -20,7 +20,7 @@ type Id struct {
 func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string) (interface{}, error) {
 	var tableName = "aqfer-idsync" // We have hard-coded this here, but it should be read from the config file.
 
-	partitionKey := fmt.Sprintf("cid=%s,spid=%s,suu=%s", cid, domain, id)
+	partitionKey := "cid=" + cid + ",spid=" + domain + ",suu=" + id
 
 	response := map[string]Id{domain: {Id: id}}
 	if len(targetDomains) != 0 {
@@ -30,7 +30,7 @@ func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string)
 		}
 		keyAttributes := make([]map[string]*dynamodb.AttributeValue, len(sortKeys))
 		for i, v := range sortKeys {
-			sk := fmt.Sprintf("dpid=%s", v)
+			sk := "dpid=" + v
 			keyAttributes[i] = map[string]*dynamodb.AttributeValue{partitionKeyName: {S: &partitionKey},
 				sortKeyName: {S: &sk}}
 		}
@@ -42,10 +42,14 @@ func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string)
 			if len(keyAttributes) < n {
 				n = len(keyAttributes)
 			}
+
 			itemsSpec.RequestItems[tableName].Keys = keyAttributes[:n]
 			keyAttributes = keyAttributes[n:]
 			for {
-				if result, err := db.BatchGetItem(&itemsSpec); err == nil {
+				if result, err := db.BatchGetItem(&itemsSpec); err != nil {
+					return nil, errors.Wrap(err, "error in BatchGetItem")
+
+				} else {
 					r := result.Responses[tableName]
 					for _, e := range r {
 						domain, id := transform(e)
@@ -61,11 +65,11 @@ func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string)
 						}
 					}
 					break
-				} else {
-					return nil, fmt.Errorf("error in BatchGetItem: %s", err)
+
 				}
 			}
 		}
+
 	} else {
 		pk := partitionKeyName
 		expr := "#P1 = :V1"
@@ -76,13 +80,14 @@ func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string)
 			KeyConditionExpression:    &expr,
 		}
 
-		if out, err := db.Query(&qin); err == nil {
+		if out, err := db.Query(&qin); err != nil {
+			return nil, errors.Wrap(err, "Error in Query")
+
+		} else {
 			for _, e := range out.Items {
 				domain, id := transform(e)
 				response[domain] = id
 			}
-		} else {
-			return nil, fmt.Errorf("error in Query: %s", err)
 		}
 	}
 	return response, nil
