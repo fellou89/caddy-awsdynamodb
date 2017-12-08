@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+	. "github.com/fellou89/caddy-awscloudwatch"
 	"github.com/pkg/errors"
 )
 
@@ -67,6 +68,7 @@ func GetIds(dynamoDB *dynamodb.DynamoDB, w http.ResponseWriter, r *http.Request)
 			return 500, errors.Wrap(errors.New(responseError), "Error generating json")
 
 		} else {
+			LoggerInstance.Info(string(bb))
 			w.Header()["Content-Type"] = []string{"application/json"}
 			w.Write(bb)
 		}
