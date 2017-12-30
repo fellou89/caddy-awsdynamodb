@@ -17,7 +17,7 @@ type Id struct {
 	TimeStamp string `json:"timestamp"`
 }
 
-func Fetch(db dynamodb.DynamoDB, cid, domain, id string, targetDomains []string) (interface{}, error) {
+func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
 	var tableName = "aqfer-idsync" // We have hard-coded this here, but it should be read from the config file.
 
 	partitionKey := "cid=" + cid + ",spid=" + domain + ",suu=" + id

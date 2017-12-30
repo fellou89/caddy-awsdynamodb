@@ -29,7 +29,6 @@ func setup(c *caddy.Controller) error {
 		cfg := httpserver.GetConfig(c)
 		mid := func(next httpserver.Handler) httpserver.Handler {
 			return MyHandler{
-				Next:     next,
 				DynamoDB: dynamodb.New(sess),
 			}
 		}
@@ -39,14 +38,9 @@ func setup(c *caddy.Controller) error {
 }
 
 type MyHandler struct {
-	Next     httpserver.Handler
 	DynamoDB *dynamodb.DynamoDB
 }
 
 func (h MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
-	if status, err := GetIds(h.DynamoDB, w, r); err != nil {
-		return status, err
-	} else {
-		return h.Next.ServeHTTP(w, r)
-	}
+	return GetIds(h.DynamoDB, w, r)
 }
