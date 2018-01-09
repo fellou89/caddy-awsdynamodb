@@ -7,12 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/service/dynamodb"
 	. "github.com/fellou89/caddy-awscloudwatch"
 	"github.com/pkg/errors"
 )
 
-func GetIds(dynamoDB *dynamodb.DynamoDB, w http.ResponseWriter, r *http.Request) (int, error) {
+func (h MyHandler) GetIds(w http.ResponseWriter, r *http.Request) (int, error) {
 	var routeExp = regexp.MustCompile(`ids/v1/([0-9a-z]+)/([0-9a-z\-\_\.]+)/([0-9A-Za-z]+)`)
 	match := routeExp.FindStringSubmatch(r.RequestURI)
 
@@ -56,7 +55,7 @@ func GetIds(dynamoDB *dynamodb.DynamoDB, w http.ResponseWriter, r *http.Request)
 		return 404, errors.New("Parameter Errors")
 	}
 
-	if resp, err := Fetch(*dynamoDB, cid, entitytype, domain, id, targetDomains); err != nil {
+	if resp, err := h.Fetch(cid, entitytype, domain, id, targetDomains); err != nil {
 		return 500, errors.Wrap(err, "Error fetching records")
 
 	} else {

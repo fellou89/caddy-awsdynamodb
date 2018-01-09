@@ -8,8 +8,6 @@ import (
 
 const (
 	maxReadItemsPerBatch = 100
-	partitionKeyName     = "partition-key"
-	sortKeyName          = "sort-key"
 )
 
 type Id struct {
@@ -17,10 +15,8 @@ type Id struct {
 	TimeStamp string `json:"timestamp"`
 }
 
-func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
-	var tableName = "aqfer-idsync" // We have hard-coded this here, but it should be read from the config file.
-
-	partitionKey := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
+	partitionKeyValue := "cid=" + cid + ",spid=" + domain + ",suu=" + id
 
 	response := map[string]Id{domain: {Id: id}}
 	if len(targetDomains) != 0 {
@@ -31,11 +27,11 @@ func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomai
 		keyAttributes := make([]map[string]*dynamodb.AttributeValue, len(sortKeys))
 		for i, v := range sortKeys {
 			sk := "dpid=" + v
-			keyAttributes[i] = map[string]*dynamodb.AttributeValue{partitionKeyName: {S: &partitionKey},
-				sortKeyName: {S: &sk}}
+			keyAttributes[i] = map[string]*dynamodb.AttributeValue{h.PartitionKeyName: {S: &partitionKeyValue},
+				h.SortKeyName: {S: &sk}}
 		}
 		itemsSpec := dynamodb.BatchGetItemInput{
-			RequestItems: map[string]*dynamodb.KeysAndAttributes{tableName: {Keys: keyAttributes}},
+			RequestItems: map[string]*dynamodb.KeysAndAttributes{h.Table: {Keys: keyAttributes}},
 		}
 		for len(keyAttributes) > 0 {
 			n := maxReadItemsPerBatch
@@ -43,23 +39,23 @@ func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomai
 				n = len(keyAttributes)
 			}
 
-			itemsSpec.RequestItems[tableName].Keys = keyAttributes[:n]
+			itemsSpec.RequestItems[h.Table].Keys = keyAttributes[:n]
 			keyAttributes = keyAttributes[n:]
 			for {
-				if result, err := db.BatchGetItem(&itemsSpec); err != nil {
+				if result, err := h.DynamoDB.BatchGetItem(&itemsSpec); err != nil {
 					return nil, errors.Wrap(err, "error in BatchGetItem")
 
 				} else {
-					r := result.Responses[tableName]
+					r := result.Responses[h.Table]
 					for _, e := range r {
-						domain, id := transform(e)
+						domain, id := h.transform(e)
 						response[domain] = id
 					}
 					if result.UnprocessedKeys != nil {
-						if unprocessed, ok := result.UnprocessedKeys[tableName]; ok {
+						if unprocessed, ok := result.UnprocessedKeys[h.Table]; ok {
 							unprocessedKeys := unprocessed.Keys
 							if len(unprocessedKeys) != 0 {
-								itemsSpec.RequestItems[tableName].Keys = unprocessedKeys
+								itemsSpec.RequestItems[h.Table].Keys = unprocessedKeys
 								continue
 							}
 						}
@@ -71,21 +67,21 @@ func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomai
 		}
 
 	} else {
-		pk := partitionKeyName
+		pk := h.PartitionKeyName
 		expr := "#P1 = :V1"
 		qin := dynamodb.QueryInput{
-			TableName:                 &tableName,
+			TableName:                 &h.Table,
 			ExpressionAttributeNames:  map[string]*string{"#P1": &pk},
-			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{":V1": {S: &partitionKey}},
+			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{":V1": {S: &partitionKeyValue}},
 			KeyConditionExpression:    &expr,
 		}
 
-		if out, err := db.Query(&qin); err != nil {
+		if out, err := h.DynamoDB.Query(&qin); err != nil {
 			return nil, errors.Wrap(err, "Error in Query")
 
 		} else {
 			for _, e := range out.Items {
-				domain, id := transform(e)
+				domain, id := h.transform(e)
 				response[domain] = id
 			}
 		}
@@ -96,7 +92,7 @@ func Fetch(db dynamodb.DynamoDB, cid, entitytype, domain, id string, targetDomai
 var dpidPattern = regexp.MustCompile("dpid=(.*)")
 var duuPattern = regexp.MustCompile("duu=(.*)")
 
-func transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
+func (h MyHandler) transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
 	var ts, domain, id string
 	for k, v := range m {
 		switch k {
@@ -105,7 +101,7 @@ func transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
 		case "value":
 			p := duuPattern.FindStringSubmatch(*v.S)
 			id = p[1]
-		case sortKeyName:
+		case h.SortKeyName:
 			p := dpidPattern.FindStringSubmatch(*v.S)
 			domain = p[1]
 		}
