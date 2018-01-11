@@ -1,17 +1,20 @@
 package awsdynamodb
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/mholt/caddy"
 	"github.com/mholt/caddy/caddyhttp/httpserver"
+	"github.com/pkg/errors"
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
-
-	"github.com/pkg/errors"
+	"regexp"
+	// "io/ioutil"
+	// "os/signal"
+	// "time"
 )
 
 func init() {
@@ -23,7 +26,6 @@ func init() {
 
 func setup(c *caddy.Controller) error {
 	if c.Next() {
-		c.Next()
 		args := c.RemainingArgs()
 
 		if len(args) < 3 {
@@ -39,19 +41,23 @@ func setup(c *caddy.Controller) error {
 
 		region := *sess.Config.Region
 
+		var ddb DBC
+		var dax *exec.Cmd
+
 		if len(args) > 3 {
 			if args[3] != "DAX" {
-				return errors.New("Fourth argument can only be DAX indicator")
+				return errors.New(fmt.Sprintf("Fourth argument can only be DAX indicator, got %s\n", args[3]))
 			} else {
-				if len(args) < 5 {
+				if len(args) < 6 {
 					return errors.New("Not enough arguments to run DAX")
 				} else {
-					endpoint := args[4]
-					if len(args) > 6 {
+					daxPort := args[4]
+					endpoint := args[5]
+					if len(args) > 7 {
 						return errors.New("Too many arguments")
 
-					} else if len(args) > 5 {
-						testingFlag := args[5]
+					} else if len(args) > 6 {
+						testingFlag := args[6]
 						if testingFlag != "testing" {
 							return errors.New("Different value than expected on last config item")
 
@@ -59,10 +65,63 @@ func setup(c *caddy.Controller) error {
 							// Should return Testing API
 						}
 					}
-					fmt.Println("node dax.js %s %s %s %s %s %s %s", region, endpoint, table, pkn, skn)
-					exec.Command("node", "dax.js", region, endpoint, table, pkn, skn).Run()
+					out, _ := exec.Command("sh", "-c", "echo $GOPATH/src/github.com/fellou89/caddy-awsdynamodb/dax.js").Output()
+					path := string(out)
+
+					dax = exec.Command("node", path[:len(path)-1], region, daxPort, endpoint, table, pkn, skn, daxPort)
+					var stderr bytes.Buffer
+					dax.Stdout = os.Stdout
+					dax.Stderr = &stderr
+					go func() {
+						err := dax.Run()
+						if err != nil {
+							fmt.Printf("%s: %s\n", err, stderr)
+						}
+					}()
+
+					ddb = DaxClient{Endpoint: "http://0.0.0.0:" + daxPort}
 				}
+
+				// looks like all this isn't needed to kill the node server
+				// interruptChan := make(chan os.Signal)
+				// go func() {
+				// 	defer close(interruptChan)
+				// listen:
+				// 	for {
+				// 		select {
+				// 		case <-interruptChan:
+				// 			req, err := http.NewRequest("GET", "http://0.0.0.0:8085/shutdown", nil)
+				// 			if err != nil {
+				// 				fmt.Printf("Error making shutdown request: %s\n", err)
+				// 			} else {
+				// 				fmt.Println("Request made")
+				// 			}
+				// 			c := &http.Client{
+				// 				Timeout: 10 * time.Second,
+				// 			}
+				// 			resp, err := c.Do(req)
+				// 			defer resp.Body.Close()
+				// 			if err != nil {
+				// 				fmt.Printf("\nFailed to send DAX shutdown request: %s\n", err)
+				// 			} else {
+				// 				body, err := ioutil.ReadAll(resp.Body)
+				// 				if err != nil {
+				// 					fmt.Println(err)
+				// 				}
+				// 				fmt.Println("Shutdown response:")
+				// 				fmt.Println(string(body))
+				// 			}
+				// 			if err := dax.Process.Kill(); err != nil {
+				// 				fmt.Printf("\nFailed to kill DAX process: %s\n", err)
+				// 			}
+				// 			break listen
+				// 		}
+				// 	}
+				// }()
+				// signal.Notify(interruptChan, os.Interrupt)
 			}
+		} else {
+			ddb = DynamoClient{Dynamo: dynamodb.New(sess)}
 		}
 
 		if err != nil {
@@ -72,7 +131,7 @@ func setup(c *caddy.Controller) error {
 		cfg := httpserver.GetConfig(c)
 		mid := func(next httpserver.Handler) httpserver.Handler {
 			return MyHandler{
-				DynamoDB:         dynamodb.New(sess),
+				DBConnection:     ddb,
 				Table:            table,
 				PartitionKeyName: pkn,
 				SortKeyName:      skn,
@@ -80,28 +139,52 @@ func setup(c *caddy.Controller) error {
 		}
 		cfg.AddMiddleware(mid)
 	}
-
-	interruptChan := make(chan os.Signal)
-	go func() {
-		defer close(interruptChan)
-	listen:
-		for {
-			select {
-			case <-interruptChan:
-				// send shutdown request to node DAX
-				break listen
-			}
-		}
-	}()
-	signal.Notify(interruptChan, os.Interrupt)
 	return nil
 }
 
 type MyHandler struct {
-	DynamoDB         *dynamodb.DynamoDB
+	DBConnection     DBC
 	Table            string
 	PartitionKeyName string
 	SortKeyName      string
+}
+
+func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
+	var response map[string]Id
+	var err error
+
+	if len(targetDomains) != 0 {
+		if response, err = h.DBConnection.BatchGetItem(h, targetDomains, cid, domain, id); err != nil {
+			return nil, err
+		}
+
+	} else {
+		if response, err = h.DBConnection.Query(h, cid, domain, id); err != nil {
+			return nil, err
+		}
+	}
+
+	return response, nil
+}
+
+var dpidPattern = regexp.MustCompile("dpid=(.*)")
+var duuPattern = regexp.MustCompile("duu=(.*)")
+
+func (h MyHandler) transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
+	var ts, domain, id string
+	for k, v := range m {
+		switch k {
+		case "timestamp":
+			ts = *v.S
+		case "value":
+			p := duuPattern.FindStringSubmatch(*v.S)
+			id = p[1]
+		case h.SortKeyName:
+			p := dpidPattern.FindStringSubmatch(*v.S)
+			domain = p[1]
+		}
+	}
+	return domain, Id{id, ts}
 }
 
 func (h MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {

@@ -1,9 +1,12 @@
 package awsdynamodb
 
 import (
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"encoding/json"
 	"github.com/pkg/errors"
-	"regexp"
+	"io/ioutil"
+	"net/http"
+
+	"github.com/aws/aws-sdk-go/service/dynamodb"
 )
 
 const (
@@ -15,96 +18,160 @@ type Id struct {
 	TimeStamp string `json:"timestamp"`
 }
 
-func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
-	partitionKeyValue := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+type DBC interface {
+	BatchGetItem(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error)
+	Query(h MyHandler, cid, domain, id string) (map[string]Id, error)
+}
 
+type DynamoClient struct {
+	Dynamo *dynamodb.DynamoDB
+}
+
+func (c DynamoClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, error) {
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
 	response := map[string]Id{domain: {Id: id}}
-	if len(targetDomains) != 0 {
-		var sortKeys = make([]string, len(targetDomains))
-		for i, t := range targetDomains {
-			sortKeys[i] = t
-		}
-		keyAttributes := make([]map[string]*dynamodb.AttributeValue, len(sortKeys))
-		for i, v := range sortKeys {
-			sk := "dpid=" + v
-			keyAttributes[i] = map[string]*dynamodb.AttributeValue{h.PartitionKeyName: {S: &partitionKeyValue},
-				h.SortKeyName: {S: &sk}}
-		}
-		itemsSpec := dynamodb.BatchGetItemInput{
-			RequestItems: map[string]*dynamodb.KeysAndAttributes{h.Table: {Keys: keyAttributes}},
-		}
-		for len(keyAttributes) > 0 {
-			n := maxReadItemsPerBatch
-			if len(keyAttributes) < n {
-				n = len(keyAttributes)
-			}
 
-			itemsSpec.RequestItems[h.Table].Keys = keyAttributes[:n]
-			keyAttributes = keyAttributes[n:]
-			for {
-				if result, err := h.DynamoDB.BatchGetItem(&itemsSpec); err != nil {
-					return nil, errors.Wrap(err, "error in BatchGetItem")
+	expr := "#P1 = :V1"
+	qin := dynamodb.QueryInput{
+		TableName:                 &h.Table,
+		ExpressionAttributeNames:  map[string]*string{"#P1": &h.PartitionKeyName},
+		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{":V1": {S: &pkv}},
+		KeyConditionExpression:    &expr,
+	}
+	if out, err := c.Dynamo.Query(&qin); err != nil {
+		return nil, errors.Wrap(err, "Error in Query")
+	} else {
+		for _, e := range out.Items {
+			domain, id := h.transform(e)
+			response[domain] = id
+		}
+	}
+	return response, nil
+}
 
-				} else {
-					r := result.Responses[h.Table]
-					for _, e := range r {
-						domain, id := h.transform(e)
-						response[domain] = id
-					}
-					if result.UnprocessedKeys != nil {
-						if unprocessed, ok := result.UnprocessedKeys[h.Table]; ok {
-							unprocessedKeys := unprocessed.Keys
-							if len(unprocessedKeys) != 0 {
-								itemsSpec.RequestItems[h.Table].Keys = unprocessedKeys
-								continue
-							}
+func (c DynamoClient) BatchGetItem(h MyHandler, targetDomains []string, cid, domain, id string) (map[string]Id, error) {
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+	response := map[string]Id{domain: {Id: id}}
+
+	var sortKeys = make([]string, len(targetDomains))
+	for i, t := range targetDomains {
+		sortKeys[i] = t
+	}
+
+	keyAttributes := make([]map[string]*dynamodb.AttributeValue, len(sortKeys))
+	for i, v := range sortKeys {
+		sk := "dpid=" + v
+		keyAttributes[i] = map[string]*dynamodb.AttributeValue{
+			h.PartitionKeyName: {S: &pkv},
+			h.SortKeyName:      {S: &sk},
+		}
+	}
+
+	itemsSpec := dynamodb.BatchGetItemInput{
+		RequestItems: map[string]*dynamodb.KeysAndAttributes{h.Table: {Keys: keyAttributes}},
+	}
+
+	for len(keyAttributes) > 0 {
+		n := maxReadItemsPerBatch
+		if len(keyAttributes) < n {
+			n = len(keyAttributes)
+		}
+
+		itemsSpec.RequestItems[h.Table].Keys = keyAttributes[:n]
+		keyAttributes = keyAttributes[n:]
+		for {
+			if result, err := c.Dynamo.BatchGetItem(&itemsSpec); err != nil {
+				return nil, errors.Wrap(err, "error in BatchGetItem")
+
+			} else {
+				r := result.Responses[h.Table]
+				for _, e := range r {
+					domain, id := h.transform(e)
+					response[domain] = id
+				}
+				if result.UnprocessedKeys != nil {
+					if unprocessed, ok := result.UnprocessedKeys[h.Table]; ok {
+						unprocessedKeys := unprocessed.Keys
+						if len(unprocessedKeys) != 0 {
+							itemsSpec.RequestItems[h.Table].Keys = unprocessedKeys
+							continue
 						}
 					}
-					break
-
 				}
-			}
-		}
+				break
 
-	} else {
-		pk := h.PartitionKeyName
-		expr := "#P1 = :V1"
-		qin := dynamodb.QueryInput{
-			TableName:                 &h.Table,
-			ExpressionAttributeNames:  map[string]*string{"#P1": &pk},
-			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{":V1": {S: &partitionKeyValue}},
-			KeyConditionExpression:    &expr,
-		}
-
-		if out, err := h.DynamoDB.Query(&qin); err != nil {
-			return nil, errors.Wrap(err, "Error in Query")
-
-		} else {
-			for _, e := range out.Items {
-				domain, id := h.transform(e)
-				response[domain] = id
 			}
 		}
 	}
 	return response, nil
 }
 
-var dpidPattern = regexp.MustCompile("dpid=(.*)")
-var duuPattern = regexp.MustCompile("duu=(.*)")
+type DaxClient struct {
+	Endpoint string
+}
 
-func (h MyHandler) transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
-	var ts, domain, id string
-	for k, v := range m {
-		switch k {
-		case "timestamp":
-			ts = *v.S
-		case "value":
-			p := duuPattern.FindStringSubmatch(*v.S)
-			id = p[1]
-		case h.SortKeyName:
-			p := dpidPattern.FindStringSubmatch(*v.S)
-			domain = p[1]
+func (c DaxClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, error) {
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+	response := map[string]Id{domain: {Id: id}}
+	req := c.Endpoint + "?pkv=" + pkv
+
+	if out, err := http.Get(req); err != nil {
+		return nil, err
+	} else {
+
+		if body, err := ioutil.ReadAll(out.Body); err != nil {
+			return nil, err
+		} else {
+			var result map[string]map[string]map[string]string
+			if err := json.Unmarshal(body, &result); err != nil {
+				return nil, err
+			} else {
+				sk := result["Item"]["sort-key"]["S"]
+				domain := dpidPattern.FindStringSubmatch(sk)[1]
+
+				id := duuPattern.FindStringSubmatch(result["Item"]["value"]["S"])[1]
+				ts := result["Item"]["timestamp"]["S"]
+
+				response[domain] = Id{id, ts}
+			}
 		}
 	}
-	return domain, Id{id, ts}
+	return response, nil
+}
+
+func (c DaxClient) BatchGetItem(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error) {
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+	response := map[string]Id{domain: {Id: id}}
+	req := c.Endpoint + "?pkv=" + pkv
+
+	req += "&skv="
+	for _, domain := range domains {
+		req += domain + ","
+	}
+	req = req[:len(req)-1]
+
+	if out, err := http.Get(req); err != nil {
+		return nil, err
+	} else {
+
+		if body, err := ioutil.ReadAll(out.Body); err != nil {
+			return nil, err
+		} else {
+			var result map[string]map[string][]map[string]map[string]string
+			if err := json.Unmarshal(body, &result); err != nil {
+				return nil, err
+			} else {
+				tableResponses := result["Responses"][h.Table]
+
+				for _, r := range tableResponses {
+					domain := dpidPattern.FindStringSubmatch(r[h.SortKeyName]["S"])[1]
+					id := duuPattern.FindStringSubmatch(r["value"]["S"])[1]
+					ts := r["timestamp"]["S"]
+
+					response[domain] = Id{id, ts}
+				}
+			}
+		}
+	}
+	return response, nil
 }
