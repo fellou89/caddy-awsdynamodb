@@ -45,38 +45,73 @@ http.createServer(async function(request, response) {
   //   response.end()
   // }
 
+  if (request.method != "GET" && request.method != "PUT") {
+    console.log("dax server only takes put and get request methods")
+    response.writeHead(400)
+    response.end()
+  }
+
   if (typeof query.pkv == "undefined" && typeof query.pkv == "undefined") {
     console.log("partition key and sort key are needed for query")
     response.writeHead(400)
     response.end()
   }
+
   var partitionKey = {S: query.pkv}
 
   response.setHeader('Content-Type', 'application/json')
 
   var opName
   var sortKeys = query.skv.split(",")
+
   if (sortKeys.length > 1) {
     var params = { RequestItems: {} }
-    params.RequestItems[tableName] = { Keys: [] }
 
-    sortKeys.forEach(function (skv, i, list) {
-      var key = {}
-      key[pkn] = partitionKey
-      key[skn] = {S: skv}
+    if (request.method == "GET") {
+      params.RequestItems[tableName] = { Keys: [] }
 
-      params.RequestItems[tableName].Keys.push(key)
-    })
-    opName = "batchGetItem"
+      sortKeys.forEach(function (skv, i, list) {
+        var key = {}
+        key[pkn] = partitionKey
+        key[skn] = {S: skv}
+
+        params.RequestItems[tableName].Keys.push(key)
+      })
+      opName = "batchGetItem"
+
+    } else {
+
+      params.RequestItems[tableName] = []
+
+      sortKeys.forEach(function (skv, i, list) {
+        request = {PutRequest: { Item: {}}}
+        request.PutRequest.Item[pkv] = partitionKey
+        request.PutRequest.Item[skv] = {S: skv}
+        // need to add timestamp and value attributes
+
+        params.RequestItems[tableName].push(request)
+      })
+      opName = "batchWriteItem"
+    }
 
   } else {
     var params = {
       TableName: tableName,
-      Key:{}
     }
-    params.Key[pkn] = partitionKey
-    params.Key[skn] = {S: sortKeys[0]}
-    opName = "getItem"
+    if (request.method == "GET") {
+      params['Key'] = {}
+      params.Key[pkn] = partitionKey
+      params.Key[skn] = {S: sortKeys[0]}
+      opName = "getItem"
+
+    } else {
+      params['Item'] = {}
+      params.Item[pkn] = partitionKey
+      params.Item[skn] = sortKey
+      // need to add timestamp and value attributes
+
+      opName = "putItem"
+    }
   }
 
   var data = await requestPromise(params, opName)
