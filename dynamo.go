@@ -53,6 +53,11 @@ func setup(c *caddy.Controller) error {
 				} else {
 					daxPort := args[4]
 					endpoint := args[5]
+
+					if endpoint == "DAX_ENDPOINT" {
+						return errors.New("DAX endpoint not set, this component should be removed from caddyfile")
+					}
+
 					if len(args) > 7 {
 						return errors.New("Too many arguments")
 
@@ -68,7 +73,7 @@ func setup(c *caddy.Controller) error {
 					out, _ := exec.Command("sh", "-c", "echo $GOPATH/src/github.com/fellou89/caddy-awsdynamodb/dax.js").Output()
 					path := string(out)
 
-					dax = exec.Command("node", path[:len(path)-1], region, daxPort, endpoint, table, pkn, skn, daxPort)
+					dax = exec.Command("node", path[:len(path)-1], region, daxPort, endpoint, table, pkn, skn)
 					var stderr bytes.Buffer
 					dax.Stdout = os.Stdout
 					dax.Stderr = &stderr
@@ -90,7 +95,7 @@ func setup(c *caddy.Controller) error {
 				// 	for {
 				// 		select {
 				// 		case <-interruptChan:
-				// 			req, err := http.NewRequest("GET", "http://0.0.0.0:8085/shutdown", nil)
+				// 			req, err := http.NewRequest("GET", "http://0.0.0.0:8086/shutdown", nil)
 				// 			if err != nil {
 				// 				fmt.Printf("Error making shutdown request: %s\n", err)
 				// 			} else {
@@ -153,13 +158,13 @@ func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []str
 	var response map[string]Id
 	var err error
 
-	if len(targetDomains) != 0 {
+	if len(targetDomains) > 1 {
 		if response, err = h.DBConnection.BatchGetItem(h, targetDomains, cid, domain, id); err != nil {
 			return nil, err
 		}
 
 	} else {
-		if response, err = h.DBConnection.Query(h, cid, domain, id); err != nil {
+		if response, err = h.DBConnection.Query(h, targetDomains, cid, domain, id); err != nil {
 			return nil, err
 		}
 	}

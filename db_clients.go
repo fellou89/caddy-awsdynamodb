@@ -20,14 +20,14 @@ type Id struct {
 
 type DBC interface {
 	BatchGetItem(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error)
-	Query(h MyHandler, cid, domain, id string) (map[string]Id, error)
+	Query(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error)
 }
 
 type DynamoClient struct {
 	Dynamo *dynamodb.DynamoDB
 }
 
-func (c DynamoClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, error) {
+func (c DynamoClient) Query(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error) {
 	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
 	response := map[string]Id{domain: {Id: id}}
 
@@ -110,10 +110,15 @@ type DaxClient struct {
 	Endpoint string
 }
 
-func (c DaxClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, error) {
-	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+func (c DaxClient) Query(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error) {
+	if len(domains) == 0 {
+		return nil, errors.New("DAX needs sort-key for request")
+	}
+
 	response := map[string]Id{domain: {Id: id}}
-	req := c.Endpoint + "?pkv=" + pkv
+
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+	req := c.Endpoint + "?pkv=" + pkv + "&skv=dpid=" + domains[0]
 
 	if out, err := http.Get(req); err != nil {
 		return nil, err
@@ -126,13 +131,15 @@ func (c DaxClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, er
 			if err := json.Unmarshal(body, &result); err != nil {
 				return nil, err
 			} else {
-				sk := result["Item"]["sort-key"]["S"]
-				domain := dpidPattern.FindStringSubmatch(sk)[1]
+				if len(result) > 0 {
+					sk := result["Item"]["sort-key"]["S"]
+					domain := dpidPattern.FindStringSubmatch(sk)[1]
 
-				id := duuPattern.FindStringSubmatch(result["Item"]["value"]["S"])[1]
-				ts := result["Item"]["timestamp"]["S"]
+					id := duuPattern.FindStringSubmatch(result["Item"]["value"]["S"])[1]
+					ts := result["Item"]["timestamp"]["S"]
 
-				response[domain] = Id{id, ts}
+					response[domain] = Id{id, ts}
+				}
 			}
 		}
 	}
@@ -140,13 +147,12 @@ func (c DaxClient) Query(h MyHandler, cid, domain, id string) (map[string]Id, er
 }
 
 func (c DaxClient) BatchGetItem(h MyHandler, domains []string, cid, domain, id string) (map[string]Id, error) {
-	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
 	response := map[string]Id{domain: {Id: id}}
-	req := c.Endpoint + "?pkv=" + pkv
 
-	req += "&skv="
+	pkv := "cid=" + cid + ",spid=" + domain + ",suu=" + id
+	req := c.Endpoint + "?pkv=" + pkv + "&skv="
 	for _, domain := range domains {
-		req += domain + ","
+		req += "dpid=" + domain + ","
 	}
 	req = req[:len(req)-1]
 
@@ -162,13 +168,15 @@ func (c DaxClient) BatchGetItem(h MyHandler, domains []string, cid, domain, id s
 				return nil, err
 			} else {
 				tableResponses := result["Responses"][h.Table]
+				if len(tableResponses) > 0 {
 
-				for _, r := range tableResponses {
-					domain := dpidPattern.FindStringSubmatch(r[h.SortKeyName]["S"])[1]
-					id := duuPattern.FindStringSubmatch(r["value"]["S"])[1]
-					ts := r["timestamp"]["S"]
+					for _, r := range tableResponses {
+						domain := dpidPattern.FindStringSubmatch(r[h.SortKeyName]["S"])[1]
+						id := duuPattern.FindStringSubmatch(r["value"]["S"])[1]
+						ts := r["timestamp"]["S"]
 
-					response[domain] = Id{id, ts}
+						response[domain] = Id{id, ts}
+					}
 				}
 			}
 		}
