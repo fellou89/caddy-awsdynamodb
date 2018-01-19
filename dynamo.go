@@ -41,15 +41,18 @@ func setup(c *caddy.Controller) error {
 
 		region := *sess.Config.Region
 
+		var id string
 		var ddb DBC
 		var dax *exec.Cmd
 
 		if len(args) > 3 {
 			if args[3] != "DAX" {
 				return errors.New(fmt.Sprintf("Fourth argument can only be DAX indicator, got %s\n", args[3]))
+
 			} else {
 				if len(args) < 6 {
 					return errors.New("Not enough arguments to run DAX")
+
 				} else {
 					daxPort := args[4]
 					endpoint := args[5]
@@ -85,6 +88,7 @@ func setup(c *caddy.Controller) error {
 					}()
 
 					ddb = DaxClient{Endpoint: "http://0.0.0.0:" + daxPort}
+					id = "dax"
 				}
 
 				// looks like all this isn't needed to kill the node server
@@ -127,6 +131,7 @@ func setup(c *caddy.Controller) error {
 			}
 		} else {
 			ddb = DynamoClient{Dynamo: dynamodb.New(sess)}
+			id = "dynamo"
 		}
 
 		if err != nil {
@@ -137,9 +142,11 @@ func setup(c *caddy.Controller) error {
 		mid := func(next httpserver.Handler) httpserver.Handler {
 			return MyHandler{
 				DBConnection:     ddb,
+				RequestID:        id,
 				Table:            table,
 				PartitionKeyName: pkn,
 				SortKeyName:      skn,
+				Next:             next,
 			}
 		}
 		cfg.AddMiddleware(mid)
@@ -149,9 +156,11 @@ func setup(c *caddy.Controller) error {
 
 type MyHandler struct {
 	DBConnection     DBC
+	RequestID        string
 	Table            string
 	PartitionKeyName string
 	SortKeyName      string
+	Next             httpserver.Handler
 }
 
 func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
@@ -193,5 +202,12 @@ func (h MyHandler) transform(m map[string]*dynamodb.AttributeValue) (string, Id)
 }
 
 func (h MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
-	return h.GetIds(w, r)
+	r.ParseForm()
+	if len(r.Form["backend"]) > 0 {
+		requestID := r.Form["backend"][0]
+		if requestID == h.RequestID {
+			return h.GetIds(w, r)
+		}
+	}
+	return h.Next.ServeHTTP(w, r)
 }

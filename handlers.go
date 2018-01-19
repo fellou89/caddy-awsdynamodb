@@ -41,6 +41,7 @@ func (h MyHandler) GetIds(w http.ResponseWriter, r *http.Request) (int, error) {
 			for _, p := range v {
 				targetDomains = append(targetDomains, strings.Split(p, ",")...)
 			}
+		case "backend":
 		default:
 			paramErrors = append(paramErrors, fmt.Sprintf("Unknown query parameter: %s\n", k))
 		}
