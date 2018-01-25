@@ -2,66 +2,52 @@ package awsdynamodb
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"regexp"
-	"strings"
 
+	"github.com/aws/aws-sdk-go/service/dynamodb"
 	. "github.com/fellou89/caddy-awscloudwatch"
+	"github.com/mholt/caddy/caddyhttp/httpserver"
 	"github.com/pkg/errors"
 )
 
+const (
+	maxReadItemsPerBatch = 100
+)
+
+type Id struct {
+	Id        string `json:"id"`
+	TimeStamp string `json:"timestamp"`
+}
+
+type DBC interface {
+	BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error)
+	Query(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error)
+}
+
+type MyHandler struct {
+	DBConnection     DBC
+	RequestID        string
+	Table            string
+	PartitionKeyName string
+	SortKeyName      string
+	Next             httpserver.Handler
+}
+
 func (h MyHandler) GetIds(w http.ResponseWriter, r *http.Request) (int, error) {
-	var routeExp = regexp.MustCompile(`ids/v1/([0-9a-z]+)/([0-9a-z\-\_\.]+)/([0-9A-Za-z]+)`)
-	match := routeExp.FindStringSubmatch(r.RequestURI)
-
-	result := make(map[string]string)
-	for i, name := range routeExp.SubexpNames() {
-		if i != 0 {
-			result[name] = match[i]
-		}
-	}
-	entitytype := match[1]
-	domain := match[2]
-	id := match[3]
-
-	// cid is the client (i.e. tenant) id. It is hardcoded here, but will be extracted from the security context
-	// the security context is the information about the current user, their role and scope of access for the
-	// current session etc.
-	cid := "c016"
 
 	r.ParseForm()
 	params := r.Form
 
-	var targetDomains []string
-	var paramErrors []string
-	for k, v := range params {
-		switch k {
-		case "target":
-			for _, p := range v {
-				targetDomains = append(targetDomains, strings.Split(p, ",")...)
-			}
-		case "backend":
-		default:
-			paramErrors = append(paramErrors, fmt.Sprintf("Unknown query parameter: %s\n", k))
-		}
-	}
+	partitionKeys := params["partitionkeys"]
+	sortKeys := params["sortkeys"]
 
-	var responseError string
-	if len(paramErrors) != 0 {
-		w.Header()["Content-Type"] = []string{"text/ascii"}
-		responseError = strings.Join(paramErrors, "")
-		fmt.Fprintf(w, responseError)
-		// this error isn't handled anywhere at the moment
-		return 404, errors.New("Parameter Errors")
-	}
-
-	if resp, err := h.Fetch(cid, entitytype, domain, id, targetDomains); err != nil {
+	if resp, err := h.Fetch(partitionKeys, sortKeys); err != nil {
 		return 500, errors.Wrap(err, "Error fetching records")
 
 	} else {
 		if bb, err := json.Marshal(resp); err != nil {
-			return 500, errors.Wrap(errors.New(responseError), "Error generating json")
+			return 500, errors.Wrap(err, "Error generating json")
 
 		} else {
 			LoggerInstance.Info(string(bb))
@@ -71,3 +57,44 @@ func (h MyHandler) GetIds(w http.ResponseWriter, r *http.Request) (int, error) {
 	}
 	return 200, nil
 }
+
+func (h MyHandler) Fetch(partitionKeys, sortKeys []string) (interface{}, error) {
+	var response map[string]Id
+	var err error
+
+	if len(sortKeys) > 1 {
+		if response, err = h.DBConnection.BatchGetItem(h, partitionKeys, sortKeys); err != nil {
+			return nil, err
+		}
+
+	} else {
+		if response, err = h.DBConnection.Query(h, partitionKeys, sortKeys); err != nil {
+			return nil, err
+		}
+	}
+
+	return response, nil
+}
+
+var dpidPattern = regexp.MustCompile("dpid=(.*)")
+var duuPattern = regexp.MustCompile("duu=(.*)")
+
+func (h MyHandler) responseTransform(m map[string]*dynamodb.AttributeValue) (string, Id) {
+	var ts, domain, id string
+	for k, v := range m {
+		switch k {
+		case "timestamp":
+			ts = *v.S
+		case "value":
+			p := duuPattern.FindStringSubmatch(*v.S)
+			id = p[1]
+		case h.SortKeyName:
+			p := dpidPattern.FindStringSubmatch(*v.S)
+			domain = p[1]
+		}
+	}
+	return domain, Id{id, ts}
+}
+
+var spidPattern = regexp.MustCompile(".*,spid=(.*),.*")
+var suuPattern = regexp.MustCompile(",.*suu=(.*)")

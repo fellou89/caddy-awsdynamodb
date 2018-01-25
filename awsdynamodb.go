@@ -11,10 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"regexp"
-	// "io/ioutil"
-	// "os/signal"
-	// "time"
+
+	. "github.com/fellou89/caddy-awsdynamodb/clients"
 )
 
 func init() {
@@ -81,8 +79,7 @@ func setup(c *caddy.Controller) error {
 					dax.Stdout = os.Stdout
 					dax.Stderr = &stderr
 					go func() {
-						err := dax.Run()
-						if err != nil {
+						if err := dax.Run(); err != nil {
 							fmt.Printf("%s: %s\n", err, stderr)
 						}
 					}()
@@ -90,44 +87,6 @@ func setup(c *caddy.Controller) error {
 					ddb = DaxClient{Endpoint: "http://0.0.0.0:" + daxPort}
 					id = "dax"
 				}
-
-				// looks like all this isn't needed to kill the node server
-				// interruptChan := make(chan os.Signal)
-				// go func() {
-				// 	defer close(interruptChan)
-				// listen:
-				// 	for {
-				// 		select {
-				// 		case <-interruptChan:
-				// 			req, err := http.NewRequest("GET", "http://0.0.0.0:8086/shutdown", nil)
-				// 			if err != nil {
-				// 				fmt.Printf("Error making shutdown request: %s\n", err)
-				// 			} else {
-				// 				fmt.Println("Request made")
-				// 			}
-				// 			c := &http.Client{
-				// 				Timeout: 10 * time.Second,
-				// 			}
-				// 			resp, err := c.Do(req)
-				// 			defer resp.Body.Close()
-				// 			if err != nil {
-				// 				fmt.Printf("\nFailed to send DAX shutdown request: %s\n", err)
-				// 			} else {
-				// 				body, err := ioutil.ReadAll(resp.Body)
-				// 				if err != nil {
-				// 					fmt.Println(err)
-				// 				}
-				// 				fmt.Println("Shutdown response:")
-				// 				fmt.Println(string(body))
-				// 			}
-				// 			if err := dax.Process.Kill(); err != nil {
-				// 				fmt.Printf("\nFailed to kill DAX process: %s\n", err)
-				// 			}
-				// 			break listen
-				// 		}
-				// 	}
-				// }()
-				// signal.Notify(interruptChan, os.Interrupt)
 			}
 		} else {
 			ddb = DynamoClient{Dynamo: dynamodb.New(sess)}
@@ -152,53 +111,6 @@ func setup(c *caddy.Controller) error {
 		cfg.AddMiddleware(mid)
 	}
 	return nil
-}
-
-type MyHandler struct {
-	DBConnection     DBC
-	RequestID        string
-	Table            string
-	PartitionKeyName string
-	SortKeyName      string
-	Next             httpserver.Handler
-}
-
-func (h MyHandler) Fetch(cid, entitytype, domain, id string, targetDomains []string) (interface{}, error) {
-	var response map[string]Id
-	var err error
-
-	if len(targetDomains) > 1 {
-		if response, err = h.DBConnection.BatchGetItem(h, targetDomains, cid, domain, id); err != nil {
-			return nil, err
-		}
-
-	} else {
-		if response, err = h.DBConnection.Query(h, targetDomains, cid, domain, id); err != nil {
-			return nil, err
-		}
-	}
-
-	return response, nil
-}
-
-var dpidPattern = regexp.MustCompile("dpid=(.*)")
-var duuPattern = regexp.MustCompile("duu=(.*)")
-
-func (h MyHandler) transform(m map[string]*dynamodb.AttributeValue) (string, Id) {
-	var ts, domain, id string
-	for k, v := range m {
-		switch k {
-		case "timestamp":
-			ts = *v.S
-		case "value":
-			p := duuPattern.FindStringSubmatch(*v.S)
-			id = p[1]
-		case h.SortKeyName:
-			p := dpidPattern.FindStringSubmatch(*v.S)
-			domain = p[1]
-		}
-	}
-	return domain, Id{id, ts}
 }
 
 func (h MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
