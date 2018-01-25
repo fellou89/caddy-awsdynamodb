@@ -3,16 +3,17 @@ package awsdynamodb
 import (
 	"encoding/json"
 	"net/http"
-	"regexp"
 
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	. "github.com/fellou89/caddy-awscloudwatch"
 	"github.com/mholt/caddy/caddyhttp/httpserver"
 	"github.com/pkg/errors"
+
+	transform "github.com/fellou89/caddy-awsdynamodb/clients"
 )
 
 type DBC interface {
-	BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error)
-	Query(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error)
+	BatchGetItem(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]transform.Id, error)
+	Query(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]transform.Id, error)
 }
 
 type MyHandler struct {
@@ -49,16 +50,16 @@ func (h MyHandler) GetIds(w http.ResponseWriter, r *http.Request) (int, error) {
 }
 
 func (h MyHandler) Fetch(partitionKeys, sortKeys []string) (interface{}, error) {
-	var response map[string]Id
+	var response map[string]transform.Id
 	var err error
 
 	if len(sortKeys) > 1 {
-		if response, err = h.DBConnection.BatchGetItem(h, partitionKeys, sortKeys); err != nil {
+		if response, err = h.DBConnection.BatchGetItem(h.Table, h.PartitionKeyName, h.SortKeyName, partitionKeys, sortKeys); err != nil {
 			return nil, err
 		}
 
 	} else {
-		if response, err = h.DBConnection.Query(h, partitionKeys, sortKeys); err != nil {
+		if response, err = h.DBConnection.Query(h.Table, h.PartitionKeyName, h.SortKeyName, partitionKeys, sortKeys); err != nil {
 			return nil, err
 		}
 	}

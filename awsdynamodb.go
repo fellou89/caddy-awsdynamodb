@@ -3,16 +3,17 @@ package awsdynamodb
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/mholt/caddy"
 	"github.com/mholt/caddy/caddyhttp/httpserver"
 	"github.com/pkg/errors"
-	"net/http"
-	"os"
-	"os/exec"
 
-	. "github.com/fellou89/caddy-awsdynamodb/clients"
+	clients "github.com/fellou89/caddy-awsdynamodb/clients"
 )
 
 func init() {
@@ -84,12 +85,12 @@ func setup(c *caddy.Controller) error {
 						}
 					}()
 
-					ddb = DaxClient{Endpoint: "http://0.0.0.0:" + daxPort}
+					ddb = clients.DaxClient{Endpoint: "http://0.0.0.0:" + daxPort}
 					id = "dax"
 				}
 			}
 		} else {
-			ddb = DynamoClient{Dynamo: dynamodb.New(sess)}
+			ddb = clients.DynamoClient{Dynamo: dynamodb.New(sess)}
 			id = "dynamo"
 		}
 
