@@ -6,19 +6,9 @@ import (
 	"regexp"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
-	. "github.com/fellou89/caddy-awscloudwatch"
 	"github.com/mholt/caddy/caddyhttp/httpserver"
 	"github.com/pkg/errors"
 )
-
-const (
-	maxReadItemsPerBatch = 100
-)
-
-type Id struct {
-	Id        string `json:"id"`
-	TimeStamp string `json:"timestamp"`
-}
 
 type DBC interface {
 	BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error)
@@ -75,26 +65,3 @@ func (h MyHandler) Fetch(partitionKeys, sortKeys []string) (interface{}, error) 
 
 	return response, nil
 }
-
-var dpidPattern = regexp.MustCompile("dpid=(.*)")
-var duuPattern = regexp.MustCompile("duu=(.*)")
-
-func (h MyHandler) responseTransform(m map[string]*dynamodb.AttributeValue) (string, Id) {
-	var ts, domain, id string
-	for k, v := range m {
-		switch k {
-		case "timestamp":
-			ts = *v.S
-		case "value":
-			p := duuPattern.FindStringSubmatch(*v.S)
-			id = p[1]
-		case h.SortKeyName:
-			p := dpidPattern.FindStringSubmatch(*v.S)
-			domain = p[1]
-		}
-	}
-	return domain, Id{id, ts}
-}
-
-var spidPattern = regexp.MustCompile(".*,spid=(.*),.*")
-var suuPattern = regexp.MustCompile(",.*suu=(.*)")

@@ -4,15 +4,17 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+)
 
-	. "github.com/fellou89/caddy-awsdynamodb"
+const (
+	maxReadItemsPerBatch = 100
 )
 
 type DynamoClient struct {
 	Dynamo *dynamodb.DynamoDB
 }
 
-func (c DynamoClient) Query(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error) {
+func (c DynamoClient) Query(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]Id, error) {
 	pkv := partitionKeys[0]
 	domain := spidPattern.FindStringSubmatch(pkv)[1]
 	id := suuPattern.FindStringSubmatch(pkv)[1]
@@ -20,8 +22,8 @@ func (c DynamoClient) Query(h MyHandler, partitionKeys, sortKeys []string) (map[
 
 	expr := "#P1 = :V1"
 	qin := dynamodb.QueryInput{
-		TableName:                 &h.Table,
-		ExpressionAttributeNames:  map[string]*string{"#P1": &h.PartitionKeyName},
+		TableName:                 &table,
+		ExpressionAttributeNames:  map[string]*string{"#P1": &partitionKeyName},
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{":V1": {S: &pkv}},
 		KeyConditionExpression:    &expr,
 	}
@@ -29,14 +31,14 @@ func (c DynamoClient) Query(h MyHandler, partitionKeys, sortKeys []string) (map[
 		return nil, errors.Wrap(err, "Error in Query")
 	} else {
 		for _, e := range out.Items {
-			domain, id := h.responseTransform(e)
+			domain, id := responseTransform(e, sortKeyName)
 			response[domain] = id
 		}
 	}
 	return response, nil
 }
 
-func (c DynamoClient) BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error) {
+func (c DynamoClient) BatchGetItem(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]Id, error) {
 	pkv := partitionKeys[0]
 	domain := spidPattern.FindStringSubmatch(pkv)[1]
 	id := suuPattern.FindStringSubmatch(pkv)[1]
@@ -45,13 +47,13 @@ func (c DynamoClient) BatchGetItem(h MyHandler, partitionKeys, sortKeys []string
 	keyAttributes := make([]map[string]*dynamodb.AttributeValue, len(sortKeys))
 	for i, sk := range sortKeys {
 		keyAttributes[i] = map[string]*dynamodb.AttributeValue{
-			h.PartitionKeyName: {S: &pkv},
-			h.SortKeyName:      {S: &sk},
+			partitionKeyName: {S: &pkv},
+			sortKeyName:      {S: &sk},
 		}
 	}
 
 	itemsSpec := dynamodb.BatchGetItemInput{
-		RequestItems: map[string]*dynamodb.KeysAndAttributes{h.Table: {Keys: keyAttributes}},
+		RequestItems: map[string]*dynamodb.KeysAndAttributes{table: {Keys: keyAttributes}},
 	}
 
 	for len(keyAttributes) > 0 {
@@ -60,23 +62,23 @@ func (c DynamoClient) BatchGetItem(h MyHandler, partitionKeys, sortKeys []string
 			n = len(keyAttributes)
 		}
 
-		itemsSpec.RequestItems[h.Table].Keys = keyAttributes[:n]
+		itemsSpec.RequestItems[table].Keys = keyAttributes[:n]
 		keyAttributes = keyAttributes[n:]
 		for {
 			if result, err := c.Dynamo.BatchGetItem(&itemsSpec); err != nil {
 				return nil, errors.Wrap(err, "error in BatchGetItem")
 
 			} else {
-				r := result.Responses[h.Table]
+				r := result.Responses[table]
 				for _, e := range r {
-					domain, id := h.responseTransform(e)
+					domain, id := responseTransform(e, sortKeyName)
 					response[domain] = id
 				}
 				if result.UnprocessedKeys != nil {
-					if unprocessed, ok := result.UnprocessedKeys[h.Table]; ok {
+					if unprocessed, ok := result.UnprocessedKeys[table]; ok {
 						unprocessedKeys := unprocessed.Keys
 						if len(unprocessedKeys) != 0 {
-							itemsSpec.RequestItems[h.Table].Keys = unprocessedKeys
+							itemsSpec.RequestItems[table].Keys = unprocessedKeys
 							continue
 						}
 					}

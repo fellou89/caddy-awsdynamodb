@@ -6,15 +6,13 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
-
-	. "github.com/fellou89/caddy-awsdynamodb"
 )
 
 type DaxClient struct {
 	Endpoint string
 }
 
-func (c DaxClient) Query(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error) {
+func (c DaxClient) Query(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]Id, error) {
 	if len(sortKeys) == 0 {
 		return nil, errors.New("DAX needs sort-key for request")
 	}
@@ -52,7 +50,7 @@ func (c DaxClient) Query(h MyHandler, partitionKeys, sortKeys []string) (map[str
 	return response, nil
 }
 
-func (c DaxClient) BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (map[string]Id, error) {
+func (c DaxClient) BatchGetItem(table, partitionKeyName, sortKeyName string, partitionKeys, sortKeys []string) (map[string]Id, error) {
 	pkv := partitionKeys[0]
 	domain := spidPattern.FindStringSubmatch(pkv)[1]
 	id := suuPattern.FindStringSubmatch(pkv)[1]
@@ -72,11 +70,11 @@ func (c DaxClient) BatchGetItem(h MyHandler, partitionKeys, sortKeys []string) (
 			if err := json.Unmarshal(body, &result); err != nil {
 				return nil, err
 			} else {
-				tableResponses := result["Responses"][h.Table]
+				tableResponses := result["Responses"][table]
 				if len(tableResponses) > 0 {
 
 					for _, r := range tableResponses {
-						domain := dpidPattern.FindStringSubmatch(r[h.SortKeyName]["S"])[1]
+						domain := dpidPattern.FindStringSubmatch(r[sortKeyName]["S"])[1]
 						id := duuPattern.FindStringSubmatch(r["value"]["S"])[1]
 						ts := r["timestamp"]["S"]
 
