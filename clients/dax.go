@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+
+	. "github.com/fellou89/caddy-awsdynamodb"
 )
 
 type DaxClient struct {

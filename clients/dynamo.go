@@ -4,6 +4,8 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+
+	. "github.com/fellou89/caddy-awsdynamodb"
 )
 
 type DynamoClient struct {
